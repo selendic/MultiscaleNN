@@ -172,3 +172,10 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# PyCharm
+.idea/
+
+# Project specific
+/plot/
+/Projekt/

@@ -654,7 +654,7 @@ def main(show_plots: bool):
 	plotter.screenshot(f"plot/solution_LOD_{"0".zfill(len(str(num_steps)))}.png")
 	plotter.screenshot(f"plot/solution_fine_{"0".zfill(len(str(num_steps)))}.png")
 
-	'''
+
 	####################################################################################################################
 	t0 = time.time()
 
@@ -756,7 +756,6 @@ def main(show_plots: bool):
 	# Clean up
 	for filename in sorted(glob.glob('plot/*.png')):
 		os.remove(filename)
-	'''
 
 
 	####################################################################################################################
