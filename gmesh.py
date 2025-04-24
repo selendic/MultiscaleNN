@@ -7,7 +7,7 @@ marker_facet_boundary = 1
 
 n = 4  # number of subdomain per row/column
 d = 1.0 / n  # size of square subdomain
-lc_outer = 0.100 * 3
+lc_outer = 0.025 * 3
 lc_inner = 0.025 * 3
 lc_debug = 0.75
 

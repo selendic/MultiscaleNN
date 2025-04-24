@@ -171,8 +171,11 @@ def main(problem: int, show_plots: bool):
 		a = ufl.inner(q * ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx
 		m = ufl.inner(u_f, v_f) * ufl.dx
 	else:
-		a = ufl.inner(ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx + ufl.inner(v * u_f, v_f) * ufl.dx
+		a = ufl.inner(ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx
 		m = ufl.inner(u_f, v_f) * ufl.dx
+		#vm = ufl.inner(v * u_f, v_f) * ufl.dx
+		#VM_h = fem.assemble_matrix(fem.form(vm), bcs_f).to_scipy()
+		#assert VM_h.shape == (num_dofs_f, num_dofs_f)
 	fine_stiffness_assembler = LocalAssembler(a)
 
 	A_h = fem.assemble_matrix(fem.form(a), bcs_f).to_scipy()
@@ -240,14 +243,24 @@ def main(problem: int, show_plots: bool):
 			xdmf.write_function(uhLOD)
 	else:
 		M_H = B_H @ P_h @ M_h @ P_h.transpose() @ B_H.transpose()
+		#VM_H = B_H @ P_h @ VM_h @ P_h.transpose() @ B_H.transpose()
 
 		# 6. Create eigensolver and set options
 		max_eigenpairs = 5
 
 		eigensolver = SLEPc.EPS().create(MPI.COMM_WORLD)
-		eigensolver.setOperators(csr_to_petsc(A_H_LOD), csr_to_petsc(M_H))
-		eigensolver.setProblemType(SLEPc.EPS.ProblemType.GHEP)  # Generalized Hermitian EVP
+		A = csr_to_petsc(A_H_LOD)# + VM_H)
+		eigensolver.setOperators(A, csr_to_petsc(M_H))
+		size = A.getSize()[0]  # Number of rows (global size of eigenvector)
+		eigensolver.setProblemType(SLEPc.EPS.ProblemType.GNHEP)  # Generalized Hermitian EVP
 		eigensolver.setDimensions(nev=max_eigenpairs)  # Compute first 3 eigenpairs
+		eigensolver.setWhichEigenpairs(SLEPc.EPS.Which.SMALLEST_REAL)  # Smallest eigenvalues
+
+		# 6.5 Set the shift for the shift-invert method
+		#st = eigensolver.getST()
+		#st.setType(SLEPc.ST.Type.SINVERT)
+		#eigensolver.setTarget(0.0)
+
 		eigensolver.setFromOptions()
 
 		# 7. Solve
@@ -255,7 +268,7 @@ def main(problem: int, show_plots: bool):
 		n_conv = eigensolver.getConverged()
 
 		if MPI.COMM_WORLD.rank == 0:
-			print(f"Number of converged eigenpairs: {n_conv}")
+			print(f"Number of converged eigenpairs by LOD solver: {n_conv}")
 
 		# 8. Extract eigenpairs
 		for i in range(min(n_conv, max_eigenpairs)):
@@ -263,6 +276,8 @@ def main(problem: int, show_plots: bool):
 			print(f"Eigenvalue {i}: {r:.6f}")
 
 			# Create PETSc vector to hold eigenfunction
+			bv = eigensolver.getBV()
+			expected_size = bv.getSizes()[0]  # global size of each eigenvector
 			eigvec_c = PETSc.Vec().createSeq(B_H.shape[0])
 			eigvec_c.set(0.0)
 			eigvec_c.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
@@ -291,7 +306,7 @@ def main(problem: int, show_plots: bool):
 
 	t1 = time.time()
 	####################################################################################################################
-	print(f"Time to solve the whole LOD system: {t1 - t0}")
+	print(f"Time to solve the whole LOD system: {t1 - t0}\n")
 
 	####################################################################################################################
 	t0 = time.time()
@@ -320,9 +335,18 @@ def main(problem: int, show_plots: bool):
 	else:
 		# 6. Create eigensolver and set options
 		eigensolver = SLEPc.EPS().create(MPI.COMM_WORLD)
-		eigensolver.setOperators(csr_to_petsc(A_h), csr_to_petsc(M_h))
-		eigensolver.setProblemType(SLEPc.EPS.ProblemType.GHEP)
+		A = csr_to_petsc(A_h)# + VM_h)
+		eigensolver.setOperators(A, csr_to_petsc(M_h))
+		size = A.getSize()[0]  # Number of rows (global size of eigenvector)
+		eigensolver.setProblemType(SLEPc.EPS.ProblemType.GNHEP)  # Generalized Hermitian EVP
 		eigensolver.setDimensions(nev=max_eigenpairs)  # Compute first 3 eigenpairs
+		eigensolver.setWhichEigenpairs(SLEPc.EPS.Which.SMALLEST_REAL)  # Smallest eigenvalues
+
+		# 6.5 Set the shift for the shift-invert method
+		#st = eigensolver.getST()
+		#st.setType(SLEPc.ST.Type.SINVERT)
+		#eigensolver.setTarget(0.0)
+
 		eigensolver.setFromOptions()
 
 		# 7. Solve
@@ -330,7 +354,7 @@ def main(problem: int, show_plots: bool):
 		n_conv = eigensolver.getConverged()
 
 		if MPI.COMM_WORLD.rank == 0:
-			print(f"Number of converged eigenpairs: {n_conv}")
+			print(f"Number of converged eigenpairs by fine solver: {n_conv}")
 
 		# 8. Extract eigenpairs
 		eigenfunctions = []
@@ -339,6 +363,8 @@ def main(problem: int, show_plots: bool):
 			print(f"Eigenvalue {i}: {r:.6f}")
 
 			# Create PETSc vector to hold eigenfunction
+			bv = eigensolver.getBV()
+			expected_size = bv.getSizes()[0]  # global size of each eigenvector
 			u_i = fem.Function(FS_f)
 			eigvec = u_i.vector
 			eigvec.set(0.0)
