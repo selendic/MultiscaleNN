@@ -18,7 +18,7 @@ kappa_y = 0.6875 * gmesh.d
 kappa_a2 = np.power(10.0, -4)
 
 # V
-gamma = 2*1e4
+gamma = 1e3
 nu = 20
 
 

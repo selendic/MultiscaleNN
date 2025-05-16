@@ -9,7 +9,7 @@ n = 4  # number of subdomain per row/column
 d = 1.0 / n  # size of square subdomain
 lc_outer = 0.025 * 3
 lc_inner = 0.025 * 3
-lc_simple = 2e-2 * 2
+lc_simple = 2e-2 * 4
 
 
 def create_simple_gmsh(size: tuple[int, int]):
