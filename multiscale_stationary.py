@@ -1,6 +1,7 @@
 import time
 
 import dolfinx
+import pyamg
 import pyvista as pv
 import ufl
 from dolfinx import fem, mesh, plot
@@ -8,31 +9,36 @@ from dolfinx.cpp.mesh import to_string
 from dolfinx.cpp.refinement import RefinementOption
 from dolfinx.io import XDMFFile
 from mpi4py import MPI
-from petsc4py import PETSc
 from scipy.sparse import csr_matrix
-from scipy.sparse.linalg import spsolve
-from slepc4py import SLEPc
+from scipy.sparse.linalg import spsolve, eigsh, LinearOperator, cg
 
 import gmesh
 from gmesh import *
 from local_assembler import LocalAssembler
 from multiscale import create_kappa, create_point_source, kappa_x, kappa_y, kappa_a2, compute_correction_operator, \
 	create_v
-from util import read_mesh, interpolation_matrix_non_matching_meshes, csr_to_petsc
+from util import read_mesh, interpolation_matrix_non_matching_meshes
 
 proc = MPI.COMM_WORLD.rank
 
 
-def main(problem: int, show_plots: bool):
-	t0 = time.time()
+def solve_eigenproblem(A, M, num_eigenpairs, without_shift=False):
+	if without_shift:
+		eigs, vecs = eigsh(A=A, M=M, k=num_eigenpairs, which="SM")
+	else:
+		ml = pyamg.smoothed_aggregation_solver(A)
+		Ainv = LinearOperator(shape=A.shape, matvec=lambda b: cg(A, b, M=ml.aspreconditioner())[0])
+		v0 = np.ones(A.shape[0])
+		eigs, vecs = eigsh(A,
+						   k=num_eigenpairs, M=M,
+						   OPinv=Ainv,
+						   v0=v0,
+						   sigma=0.0, which='LM', return_eigenvectors=True)
 
-	# Create coarse mesh
-	gmesh.create_gmsh(False)
-	# create_simple_gmsh(cell_marker_1, boundary_marker)
+	return eigs, vecs
 
-	# Read coarse mesh
-	msh_c, ct_c, ft_c = read_mesh(False)
 
+def refine_mesh(msh_c: mesh.Mesh, ct_c: mesh.MeshTags):
 	# Create fine mesh
 	# https://fenicsproject.discourse.group/t/input-for-mesh-refinement-with-refine-plaza/13426/4
 	msh_f, parent_cells, _ = mesh.refine_plaza(
@@ -67,6 +73,30 @@ def main(problem: int, show_plots: bool):
 	facets = mesh.locate_entities_boundary(msh_f, msh_f.topology.dim - 1, lambda x: np.full(x.shape[1], True))
 	ft_f = mesh.meshtags(msh_f, 1, facets, marker_facet_boundary)
 
+	return msh_f, ct_f, ft_f, parent_cells
+
+
+def main(problem: int, num_mesh_refines: int, show_plots: bool):
+	t0 = time.time()
+
+	# Create coarse mesh
+	#gmesh.create_gmsh(False)
+	gmesh.create_simple_gmsh(size=(2, 3))
+
+	# Read coarse mesh
+	msh_c, ct_c, ft_c = read_mesh(False)
+
+	# Refine coarse mesh to create fine mesh
+
+	msh_f, ct_f, ft_f, parent_cells = refine_mesh(msh_c, ct_c)
+
+	for i in range(num_mesh_refines - 1):
+		parent_cells_old = parent_cells.copy()
+		msh_f, ct_f, ft_f, parent_cells = refine_mesh(msh_f, ct_f)
+		for j, c in enumerate(parent_cells):
+			parent_cells[j] = parent_cells_old[c]
+
+
 	# Number of cells on coarse mesh
 	num_cells_c = ct_c.indices.shape[0]  # N_T_H
 	index_map_c = msh_c.topology.index_map(2)
@@ -87,6 +117,22 @@ def main(problem: int, show_plots: bool):
 	boundary_facets_f = ft_f.find(marker_facet_boundary)
 	boundary_dofs_f = fem.locate_dofs_topological(FS_f, msh_f.topology.dim - 1, boundary_facets_f)
 	bcs_f = [fem.dirichletbc(dolfinx.default_scalar_type(0), boundary_dofs_f, FS_f)]
+	not_boundary_dofs_f = np.setdiff1d(np.arange(num_dofs_f), boundary_dofs_f, assume_unique=True)
+	# Create boundary correction (restriction) matrix B_h and boundary condition on fine mesh
+	B_h = csr_matrix(
+		(
+			np.ones_like(not_boundary_dofs_f),
+			(
+				not_boundary_dofs_f,
+				not_boundary_dofs_f
+			)
+		),
+		shape=(num_dofs_f, num_dofs_f)
+	)
+	assert B_h.shape == (num_dofs_f, num_dofs_f)
+	# Remove all-zero rows from B_h
+	ind_ptr = np.unique(B_h.indptr)
+	B_h = csr_matrix((B_h.data, B_h.indices, ind_ptr), shape=(len(ind_ptr) - 1, B_h.shape[1]))
 
 	# Create boundary correction (restriction) matrix B_H and boundary condition on coarse mesh
 	boundary_facets_c = ft_c.find(marker_facet_boundary)
@@ -148,7 +194,7 @@ def main(problem: int, show_plots: bool):
 		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=not show_plots)
 		plotter.show_axes()
 		plotter.show_grid()
-		plotter.add_mesh(grid_v, show_edges=True)
+		plotter.add_mesh(grid_v, show_edges=True, scalars="v", cmap="seismic")
 		plotter.view_xy()
 		if not show_plots:
 			plotter.screenshot("data/v.png")
@@ -156,7 +202,6 @@ def main(problem: int, show_plots: bool):
 			plotter.show()
 
 	####################################################################################################################
-	t0 = time.time()
 
 	# Define our problem on fine mesh using Unified Form Language (UFL)
 	# and assemble the stiffness and mass matrices A_h and M_h
@@ -170,16 +215,29 @@ def main(problem: int, show_plots: bool):
 	if problem == 0:
 		a = ufl.inner(q * ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx
 		m = ufl.inner(u_f, v_f) * ufl.dx
+
+		A_h = fem.assemble_matrix(fem.form(a), bcs_f).to_scipy()
+		assert A_h.shape == (num_dofs_f, num_dofs_f)
+
+		fine_stiffness_assembler = LocalAssembler(a)
 	else:
 		a = ufl.inner(ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx
 		m = ufl.inner(u_f, v_f) * ufl.dx
-		#vm = ufl.inner(v * u_f, v_f) * ufl.dx
-		#VM_h = fem.assemble_matrix(fem.form(vm), bcs_f).to_scipy()
-		#assert VM_h.shape == (num_dofs_f, num_dofs_f)
-	fine_stiffness_assembler = LocalAssembler(a)
 
-	A_h = fem.assemble_matrix(fem.form(a), bcs_f).to_scipy()
-	assert A_h.shape == (num_dofs_f, num_dofs_f)
+		x = ufl.SpatialCoordinate(msh_f)
+		nu = 10
+		v_expr = 1e3 * ufl.cos(nu * ufl.pi * (x[0] + 0.1)) * ufl.cos(nu * ufl.pi * x[1])
+
+		vm = ufl.inner(v_expr * u_f, v_f) * ufl.dx
+		A_h = fem.assemble_matrix(fem.form(a), bcs_f).to_scipy()
+		assert A_h.shape == (num_dofs_f, num_dofs_f)
+
+		VM_h = fem.assemble_matrix(fem.form(vm), bcs_f).to_scipy()
+		assert VM_h.shape == (num_dofs_f, num_dofs_f)
+
+		fine_stiffness_assembler = LocalAssembler(a + vm)
+		A_h = A_h.copy() + VM_h.copy()
+
 	M_h = fem.assemble_matrix(fem.form(m), bcs_f).to_scipy()
 	assert M_h.shape == (num_dofs_f, num_dofs_f)
 
@@ -189,10 +247,12 @@ def main(problem: int, show_plots: bool):
 	# Calculate constraint matrix C_h
 	C_h = P_h @ M_h
 
-	#        print(f"Setup time: {time.time() - t0}")
-	#        t0 = time.time()
+	t1 = time.time()
+	print("Setup time: ", t1 - t0)
 
+	"""
 	# Create corrector matrix Q_h
+	print("Computing correction operator Q...")
 	t00 = time.time()
 	Q_h = compute_correction_operator(msh_c, ct_c, parent_cells,
 									  FS_c, FS_f,
@@ -204,7 +264,6 @@ def main(problem: int, show_plots: bool):
 	#        t0 = time.time()
 
 	A_H_LOD = B_H @ (P_h + Q_h) @ A_h @ (P_h + Q_h).transpose() @ B_H.transpose()
-
 	# for i in range(num_steps):
 	if problem == 0:
 		L = ufl.inner(f, v_f) * ufl.dx  # + dt * ufl.inner(f, v_f) * ufl.dx
@@ -245,71 +304,44 @@ def main(problem: int, show_plots: bool):
 		M_H = B_H @ P_h @ M_h @ P_h.transpose() @ B_H.transpose()
 		#VM_H = B_H @ P_h @ VM_h @ P_h.transpose() @ B_H.transpose()
 
-		# 6. Create eigensolver and set options
-		max_eigenpairs = 5
+		A = A_H_LOD.copy() #+ VM_H
+		is_A_symmetric = np.allclose(A.todense(), A.T.todense(), atol=1e-10)
+		is_M_symmetric = np.allclose(M_H.todense(), M_H.T.todense(), atol=1e-10)
+		assert is_A_symmetric and is_M_symmetric
 
-		eigensolver = SLEPc.EPS().create(MPI.COMM_WORLD)
-		A = csr_to_petsc(A_H_LOD)# + VM_H)
-		eigensolver.setOperators(A, csr_to_petsc(M_H))
-		size = A.getSize()[0]  # Number of rows (global size of eigenvector)
-		eigensolver.setProblemType(SLEPc.EPS.ProblemType.GNHEP)  # Generalized Hermitian EVP
-		eigensolver.setDimensions(nev=max_eigenpairs)  # Compute first 3 eigenpairs
-		eigensolver.setWhichEigenpairs(SLEPc.EPS.Which.SMALLEST_REAL)  # Smallest eigenvalues
+		eigs, vecs = solve_eigenproblem(A, M_H, num_eigenpairs=20)
 
-		# 6.5 Set the shift for the shift-invert method
-		#st = eigensolver.getST()
-		#st.setType(SLEPc.ST.Type.SINVERT)
-		#eigensolver.setTarget(0.0)
-
-		eigensolver.setFromOptions()
-
-		# 7. Solve
-		eigensolver.solve()
-		n_conv = eigensolver.getConverged()
-
-		if MPI.COMM_WORLD.rank == 0:
-			print(f"Number of converged eigenpairs by LOD solver: {n_conv}")
-
-		# 8. Extract eigenpairs
-		for i in range(min(n_conv, max_eigenpairs)):
-			r = eigensolver.getEigenvalue(i)
-			print(f"Eigenvalue {i}: {r:.6f}")
-
-			# Create PETSc vector to hold eigenfunction
-			bv = eigensolver.getBV()
-			expected_size = bv.getSizes()[0]  # global size of each eigenvector
-			eigvec_c = PETSc.Vec().createSeq(B_H.shape[0])
-			eigvec_c.set(0.0)
-			eigvec_c.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
-			eigensolver.getEigenvector(i, eigvec_c)
-			eigvec_c.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
-
-			u_i_f = fem.Function(FS_f)
-			u_i_f.x.array.real = (P_h + Q_h).transpose() @ B_H.transpose() @ eigvec_c.array.real
+		for i in range(len(eigs)):
+			r = eigs[i]
+			vec = vecs[:, i]
+			vec = (P_h + Q_h).transpose() @ B_H.transpose() @ vec
 
 			# Save plot
 			grid_uhLOD = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
-			grid_uhLOD.point_data["uhLOD"] = u_i_f.x.array.real
+			grid_uhLOD.point_data["uhLOD"] = vec
 			grid_uhLOD.set_active_scalars("uhLOD")
 
 			plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
 			plotter.show_axes()
 			plotter.show_grid()
-			plotter.add_mesh(grid_uhLOD, show_edges=True)
+			plotter.add_mesh(grid_uhLOD, show_edges=False, scalars="uhLOD", cmap="seismic")
 			plotter.view_xy()
 			plotter.screenshot(f"plot_stationary/uhLOD_eigen_{r}.png")
 
+			# Save to XDMF
+			u_i_vec = fem.Function(FS_f)
+			u_i_vec.x.array.real = vec
 			with dolfinx.io.XDMFFile(msh_f.comm, f"data/uhLOD_eigen_{r}.xdmf", "w",
 									 encoding=XDMFFile.Encoding.ASCII) as xdmf:
 				xdmf.write_mesh(msh_f)
-				xdmf.write_function(u_i_f)
+				xdmf.write_function(u_i_vec)
 
-	t1 = time.time()
+	t02 = time.time()
 	####################################################################################################################
-	print(f"Time to solve the whole LOD system: {t1 - t0}\n")
-
+	print(f"Time to solve LOD system: {t02 - t01}\n")
+	"""
 	####################################################################################################################
-	t0 = time.time()
+	t10 = time.time()
 
 	# Solving the system only on fine mesh for comparison
 
@@ -329,71 +361,92 @@ def main(problem: int, show_plots: bool):
 		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
 		plotter.show_axes()
 		plotter.show_grid()
-		plotter.add_mesh(grid_uh_f, show_edges=True)
+		plotter.add_mesh(grid_uh_f, show_edges=False, scalars="uh_f")
 		plotter.view_xy()
 		plotter.screenshot(f"plot_stationary/uh_f.png")
 	else:
-		# 6. Create eigensolver and set options
-		eigensolver = SLEPc.EPS().create(MPI.COMM_WORLD)
-		A = csr_to_petsc(A_h)# + VM_h)
-		eigensolver.setOperators(A, csr_to_petsc(M_h))
-		size = A.getSize()[0]  # Number of rows (global size of eigenvector)
-		eigensolver.setProblemType(SLEPc.EPS.ProblemType.GNHEP)  # Generalized Hermitian EVP
-		eigensolver.setDimensions(nev=max_eigenpairs)  # Compute first 3 eigenpairs
-		eigensolver.setWhichEigenpairs(SLEPc.EPS.Which.SMALLEST_REAL)  # Smallest eigenvalues
+		A = B_h @ A_h @ B_h.transpose() #+ VM_h
+		M = B_h @ M_h @ B_h.transpose()
+		is_A_symmetric = np.allclose(A.todense(), A.T.todense(), atol=1e-10)
+		is_M_symmetric = np.allclose(M.todense(), M.T.todense(), atol=1e-10)
+		assert is_A_symmetric and is_M_symmetric
 
-		# 6.5 Set the shift for the shift-invert method
-		#st = eigensolver.getST()
-		#st.setType(SLEPc.ST.Type.SINVERT)
-		#eigensolver.setTarget(0.0)
+		eigs, vecs = solve_eigenproblem(A, M, num_eigenpairs=20)
 
-		eigensolver.setFromOptions()
-
-		# 7. Solve
-		eigensolver.solve()
-		n_conv = eigensolver.getConverged()
-
-		if MPI.COMM_WORLD.rank == 0:
-			print(f"Number of converged eigenpairs by fine solver: {n_conv}")
-
-		# 8. Extract eigenpairs
-		eigenfunctions = []
-		for i in range(min(n_conv, max_eigenpairs)):
-			r = eigensolver.getEigenvalue(i)
-			print(f"Eigenvalue {i}: {r:.6f}")
-
-			# Create PETSc vector to hold eigenfunction
-			bv = eigensolver.getBV()
-			expected_size = bv.getSizes()[0]  # global size of each eigenvector
-			u_i = fem.Function(FS_f)
-			eigvec = u_i.vector
-			eigvec.set(0.0)
-			eigvec.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
-
-			eigensolver.getEigenvector(i, eigvec)
-			eigvec.ghostUpdate(addv=PETSc.InsertMode.INSERT, mode=PETSc.ScatterMode.FORWARD)
-			eigenfunctions.append(u_i)
+		for i in range(len(eigs)):
+			r = eigs[i]
+			vec = vecs[:, i]
+			vec = B_h.transpose() @ vec
 
 			# Save plot
 			grid_uh_f = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
-			grid_uh_f.point_data["uh_f"] = u_i.x.array.real
+			grid_uh_f.point_data["uh_f"] = vec
 			grid_uh_f.set_active_scalars("uh_f")
 
 			plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
 			plotter.show_axes()
 			plotter.show_grid()
-			plotter.add_mesh(grid_uh_f, show_edges=True)
+			plotter.add_mesh(grid_uh_f, show_edges=False, scalars="uh_f", cmap="seismic")
 			plotter.view_xy()
 			plotter.screenshot(f"plot_stationary/uh_f_eigen_{r}.png")
 
+			# Save to XDMF
+			u_i_vec = fem.Function(FS_f)
+			u_i_vec.x.array.real = vec
 			with dolfinx.io.XDMFFile(msh_f.comm, f"data/uh_f_eigen_{r}.xdmf", "w",
 									 encoding=XDMFFile.Encoding.ASCII) as xdmf:
 				xdmf.write_mesh(msh_f)
-				xdmf.write_function(u_i)
+				xdmf.write_function(u_i_vec)
 
-	t1 = time.time()
+	t11 = time.time()
+	print(f"Time to solve fine system: {t11 - t10}")
 	####################################################################################################################
-	print(f"Time to solve fine system: {t1 - t0}")
+
+	# Solving the system only on coarse mesh for comparison
+
+	# for i in range(num_steps):
+
+	if problem == 0:
+		raise NotImplementedError
+	else:
+		# Solve the coarse system
+		A_H = B_H @ P_h @ A_h @ P_h.transpose() @ B_H.transpose()
+		M_H = B_H @ P_h @ M_h @ P_h.transpose() @ B_H.transpose()
+		#VM_H = B_H @ P_h @ VM_h @ P_h.transpose() @ B_H.transpose()
+
+		A = A_H #+ VM_H
+
+		# Check symmetry
+		is_A_H_symmetric = np.allclose(A.todense(), A.T.todense(), atol=1e-10)
+		is_M_H_symmetric = np.allclose(M_H.todense(), M_H.T.todense(), atol=1e-10)
+		assert is_A_H_symmetric and is_M_H_symmetric
+
+		# Solve the eigenvalue problem
+		eigs, vecs = solve_eigenproblem(A, M_H, num_eigenpairs=20)
+		for i in range(len(eigs)):
+			r = eigs[i]
+			vec = vecs[:, i]
+			vec = B_H.transpose() @ vec
+
+			# Save plot
+			grid_uh_c = pv.UnstructuredGrid(*plot.vtk_mesh(FS_c))
+			grid_uh_c.point_data["uh_c"] = vec
+			grid_uh_c.set_active_scalars("uh_c")
+
+			plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
+			plotter.show_axes()
+			plotter.show_grid()
+			plotter.add_mesh(grid_uh_c, show_edges=False, scalars="uh_c", cmap="seismic")
+			plotter.view_xy()
+			plotter.screenshot(f"plot_stationary/uh_c_eigen_{r}.png")
+
+			# Save to XDMF
+			u_i_vec = fem.Function(FS_c)
+			u_i_vec.x.array.real = vec
+			with dolfinx.io.XDMFFile(msh_c.comm, f"data/uh_c_eigen_{r}.xdmf", "w",
+									 encoding=XDMFFile.Encoding.ASCII) as xdmf:
+				xdmf.write_mesh(msh_c)
+				xdmf.write_function(u_i_vec)
 
 
 '''        
@@ -490,4 +543,4 @@ if __name__ == "__main__":
 		0,  # elliptic; poisson; heat
 		1  # eigenvalue
 	]
-	main(problem=1, show_plots=True)
+	main(problem=1, num_mesh_refines=1, show_plots=True)
