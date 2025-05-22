@@ -22,6 +22,10 @@ from util import read_mesh, interpolation_matrix_non_matching_meshes
 proc = MPI.COMM_WORLD.rank
 
 
+# V
+gamma = 1e3
+nu = 20.0
+
 num_eigenpairs = 20
 
 def solve_eigenproblem(A, M, num_eigenpairs, without_shift=False):
@@ -86,7 +90,8 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 	gmesh.create_simple_gmsh(size=(2, 3))
 
 	# Read coarse mesh
-	msh_c, ct_c, ft_c = read_mesh(False)
+	cell_type = "triangle"  # "quad"
+	msh_c, ct_c, ft_c = read_mesh(False, cell_type)
 
 	# Refine coarse mesh to create fine mesh
 
@@ -157,10 +162,11 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 	ind_ptr = np.unique(B_H.indptr)
 	B_H = csr_matrix((B_H.data, B_H.indices, ind_ptr), shape=(len(ind_ptr) - 1, B_H.shape[1]))
 
-	# Create kappa and rhs source term f
+	# Create kappa and rhs sou_erm f
 	q = create_kappa(msh_f, ct_f, marker_cell_outer, marker_cell_inner)[0]
 	f = create_point_source(msh_f, kappa_x, kappa_y, kappa_a2)
-	v = create_v(FS_f)
+	v_f = create_v(FS_f, gamma, nu)
+	v_c = create_v(FS_c, gamma, nu)
 
 	if problem == 0:
 		# Plot q and point source
@@ -176,6 +182,7 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			plotter.screenshot("data/q.png")
 		else:
 			plotter.show()
+		plotter.close()
 
 		grid_ps = pv.UnstructuredGrid(*plot.vtk_mesh(msh_f, msh_f.topology.dim))
 		grid_ps.point_data["f"] = f.x.array.real
@@ -189,19 +196,35 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			plotter.screenshot("data/f.png")
 		else:
 			plotter.show()
+		plotter.close()
 	else:
-		grid_v = pv.UnstructuredGrid(*plot.vtk_mesh(msh_f, msh_f.topology.dim))
-		grid_v.point_data["v"] = v.x.array.real
-		grid_v.set_active_scalars("v")
+		grid_v_c = pv.UnstructuredGrid(*plot.vtk_mesh(msh_c, msh_c.topology.dim))
+		grid_v_c.point_data["v_c"] = v_c.x.array.real
+		grid_v_c.set_active_scalars("v_c")
 		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=not show_plots)
 		plotter.show_axes()
 		plotter.show_grid()
-		plotter.add_mesh(grid_v, show_edges=True, scalars="v", cmap="seismic")
+		plotter.add_mesh(grid_v_c, show_edges=True, scalars="v_c", cmap="seismic")
 		plotter.view_xy()
 		if not show_plots:
-			plotter.screenshot("data/v.png")
+			plotter.screenshot("data/v_c.png")
 		else:
 			plotter.show()
+		plotter.close()
+
+		grid_v_f = pv.UnstructuredGrid(*plot.vtk_mesh(msh_f, msh_f.topology.dim))
+		grid_v_f.point_data["v_f"] = v_f.x.array.real
+		grid_v_f.set_active_scalars("v_f")
+		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=not show_plots)
+		plotter.show_axes()
+		plotter.show_grid()
+		plotter.add_mesh(grid_v_f, show_edges=True, scalars="v_f", cmap="seismic")
+		plotter.view_xy()
+		if not show_plots:
+			plotter.screenshot("data/v_f.png")
+		else:
+			plotter.show()
+		plotter.close()
 
 	####################################################################################################################
 
@@ -227,8 +250,7 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 		m = ufl.inner(u_f, v_f) * ufl.dx
 
 		x = ufl.SpatialCoordinate(msh_f)
-		nu = 10
-		v_expr = 1e3 * ufl.cos(nu * ufl.pi * (x[0] + 0.1)) * ufl.cos(nu * ufl.pi * x[1])
+		v_expr = gamma * ufl.cos(nu * ufl.pi * (x[0] + 0.1)) * ufl.cos(nu * ufl.pi * x[1])
 
 		vm = ufl.inner(v_expr * u_f, v_f) * ufl.dx
 		A_h = fem.assemble_matrix(fem.form(a), bcs_f).to_scipy()
@@ -252,7 +274,7 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 	t1 = time.time()
 	print("Setup time: ", t1 - t0)
 
-	"""
+
 	# Create corrector matrix Q_h
 	print("Computing correction operator Q...")
 	t00 = time.time()
@@ -298,20 +320,20 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 		plotter.add_mesh(grid_uhLOD, show_edges=True)
 		plotter.view_xy()
 		plotter.screenshot(f"plot_stationary/uhLOD.png")
+		plotter.close()
 
 		with dolfinx.io.XDMFFile(msh_f.comm, "data/uhLOD.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
 			xdmf.write_mesh(msh_f)
 			xdmf.write_function(uhLOD)
 	else:
-		M_H = B_H @ P_h @ M_h @ P_h.transpose() @ B_H.transpose()
+		M_H = B_H @ (P_h + Q_h) @ M_h @ (P_h + Q_h).transpose() @ B_H.transpose()
 		#VM_H = B_H @ P_h @ VM_h @ P_h.transpose() @ B_H.transpose()
 
-		A = A_H_LOD.copy() #+ VM_H
 		#is_A_symmetric = np.allclose(A.todense(), A.T.todense(), atol=1e-10)
 		#is_M_symmetric = np.allclose(M_H.todense(), M_H.T.todense(), atol=1e-10)
 		#assert is_A_symmetric and is_M_symmetric
 
-		eigs, vecs = solve_eigenproblem(A, M_H, num_eigenpairs=100)
+		eigs, vecs = solve_eigenproblem(A_H_LOD, M_H, num_eigenpairs=100)
 
 		for i in range(len(eigs)):
 			r = eigs[i]
@@ -329,18 +351,19 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			plotter.add_mesh(grid_uhLOD, show_edges=False, scalars="uhLOD", cmap="seismic")
 			plotter.view_xy()
 			plotter.screenshot(f"plot_stationary/uhLOD_eigen_{r}.png")
+			plotter.close()
 
 			# Save to XDMF
-			u_i_vec = fem.Function(FS_f)
-			u_i_vec.x.array.real = vec
-			with dolfinx.io.XDMFFile(msh_f.comm, f"data/uhLOD_eigen_{r}.xdmf", "w",
-									 encoding=XDMFFile.Encoding.ASCII) as xdmf:
-				xdmf.write_mesh(msh_f)
-				xdmf.write_function(u_i_vec)
+			#u_i_vec = fem.Function(FS_f)
+			#u_i_vec.x.array.real = vec
+			#with dolfinx.io.XDMFFile(msh_f.comm, f"data/uhLOD_eigen_{r}.xdmf", "w",
+			#						 encoding=XDMFFile.Encoding.ASCII) as xdmf:
+			#	xdmf.write_mesh(msh_f)
+			#	xdmf.write_function(u_i_vec)
 
 	t02 = time.time()
 	print(f"Time to solve LOD system: {t02 - t01}\n")
-	"""
+
 	####################################################################################################################
 
 	# Solving the system only on coarse mesh for comparison
@@ -357,15 +380,13 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 		M_H = B_H @ P_h @ M_h @ P_h.transpose() @ B_H.transpose()
 		#VM_H = B_H @ P_h @ VM_h @ P_h.transpose() @ B_H.transpose()
 
-		A = A_H.copy() #+ VM_H
-
 		# Check symmetry
 		#is_A_H_symmetric = np.allclose(A.todense(), A.T.todense(), atol=1e-10)
 		#is_M_H_symmetric = np.allclose(M_H.todense(), M_H.T.todense(), atol=1e-10)
 		#assert is_A_H_symmetric and is_M_H_symmetric
 
 		# Solve the eigenvalue problem
-		eigs, vecs = solve_eigenproblem(A, M_H, num_eigenpairs=100)
+		eigs, vecs = solve_eigenproblem(A_H, M_H, num_eigenpairs=100)
 		for i in range(len(eigs)):
 			r = eigs[i]
 			vec = vecs[:, i]
@@ -382,21 +403,22 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			plotter.add_mesh(grid_uh_c, show_edges=False, scalars="uh_c", cmap="seismic")
 			plotter.view_xy()
 			plotter.screenshot(f"plot_stationary/uh_c_eigen_{r}.png")
+			plotter.close()
 
 			# Save to XDMF
-			u_i_vec = fem.Function(FS_c)
-			u_i_vec.x.array.real = vec
-			with dolfinx.io.XDMFFile(msh_c.comm, f"data/uh_c_eigen_{r}.xdmf", "w",
-									 encoding=XDMFFile.Encoding.ASCII) as xdmf:
-				xdmf.write_mesh(msh_c)
-				xdmf.write_function(u_i_vec)
+			#u_i_vec = fem.Function(FS_c)
+			#u_i_vec.x.array.real = vec
+			#with dolfinx.io.XDMFFile(msh_c.comm, f"data/uh_c_eigen_{r}.xdmf", "w",
+			#						 encoding=XDMFFile.Encoding.ASCII) as xdmf:
+			#	xdmf.write_mesh(msh_c)
+			#	xdmf.write_function(u_i_vec)
 
 	t12 = time.time()
 	print(f"Time to solve coarse system: {t12 - t11}\n")
 
 	####################################################################################################################
 	t20 = time.time()
-	"""
+
 	# Solving the system only on fine mesh for comparison
 
 	# for i in range(num_steps):
@@ -418,6 +440,7 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 		plotter.add_mesh(grid_uh_f, show_edges=False, scalars="uh_f")
 		plotter.view_xy()
 		plotter.screenshot(f"plot_stationary/uh_f.png")
+		plotter.close()
 	else:
 		A = B_h @ A_h @ B_h.transpose() #+ VM_h
 		M = B_h @ M_h @ B_h.transpose()
@@ -425,7 +448,7 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 		#is_M_symmetric = np.allclose(M.todense(), M.T.todense(), atol=1e-10)
 		#assert is_A_symmetric and is_M_symmetric
 
-		eigs, vecs = solve_eigenproblem(A, M, num_eigenpairs=10)
+		eigs, vecs = solve_eigenproblem(A, M, num_eigenpairs=100)
 
 		for i in range(len(eigs)):
 			r = eigs[i]
@@ -443,18 +466,19 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			plotter.add_mesh(grid_uh_f, show_edges=False, scalars="uh_f", cmap="seismic")
 			plotter.view_xy()
 			plotter.screenshot(f"plot_stationary/uh_f_eigen_{r}.png")
+			plotter.close()
 
 			# Save to XDMF
-			u_i_vec = fem.Function(FS_f)
-			u_i_vec.x.array.real = vec
-			with dolfinx.io.XDMFFile(msh_f.comm, f"data/uh_f_eigen_{r}.xdmf", "w",
-									 encoding=XDMFFile.Encoding.ASCII) as xdmf:
-				xdmf.write_mesh(msh_f)
-				xdmf.write_function(u_i_vec)
+			#u_i_vec = fem.Function(FS_f)
+			#u_i_vec.x.array.real = vec
+			#with dolfinx.io.XDMFFile(msh_f.comm, f"data/uh_f_eigen_{r}.xdmf", "w",
+			#						 encoding=XDMFFile.Encoding.ASCII) as xdmf:
+			#	xdmf.write_mesh(msh_f)
+			#	xdmf.write_function(u_i_vec)
 
 	t21 = time.time()
 	print(f"Time to solve fine system: {t21 - t20}")
-	"""
+	####################################################################################################################
 
 
 '''        
@@ -493,6 +517,7 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
         plotter.add_mesh(grid, show_edges=True)
         plotter.view_xy()
         plotter.screenshot(f"data/solution_{suffix}.png")
+		plotter.close()
 
     # Interpolate coarse solution to fine mesh
     # https://github.com/FEniCS/dolfinx/blob/v0.8.0/python/test/unit/fem/test_interpolation.py
@@ -544,6 +569,7 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
     plotter.add_mesh(grid_diff, show_edges=True)
     plotter.view_xy()
     plotter.screenshot("data/solution_diff.png")
+	plotter.close()
 '''
 
 if __name__ == "__main__":
@@ -551,4 +577,4 @@ if __name__ == "__main__":
 		0,  # elliptic; poisson; heat
 		1  # eigenvalue
 	]
-	main(problem=1, num_mesh_refines=1, show_plots=True)
+	main(problem=1, num_mesh_refines=2, show_plots=True)

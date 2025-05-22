@@ -12,11 +12,15 @@ lc_inner = 0.025 * 3
 lc_simple = 2e-2 * 4
 
 
-def create_simple_gmsh(size: tuple[int, int]):
+def create_simple_gmsh(size: tuple[int, int], quad: bool = False):
 
 	w, h = size
 
 	gmsh.initialize()
+
+	if quad:
+		gmsh.option.setNumber("Mesh.Algorithm", 8)  # Use Delaunay quadrangulation
+		gmsh.option.setNumber("Mesh.RecombinationAlgorithm", 1)  # Standard recombination
 
 	p1 = gmsh.model.occ.addPoint(0.0, 0.0, 0.0, lc_simple)
 	p2 = gmsh.model.occ.addPoint(w, 0.0, 0.0, lc_simple)
@@ -30,13 +34,16 @@ def create_simple_gmsh(size: tuple[int, int]):
 
 	cl = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
 	ps = gmsh.model.occ.addPlaneSurface([cl])
-
 	gmsh.model.occ.synchronize()
+
+	if quad:
+		# Force quadrilateral mesh
+		gmsh.model.mesh.setRecombine(2, ps)  # Recombine triangles into quads
 
 	# Tag the cells
 	gmsh.model.addPhysicalGroup(2, [ps], marker_cell_outer)
 
-	# Tag the facets
+	# Tag boundary facets
 	facets = []
 	for line in gmsh.model.getEntities(dim=1):
 		com = gmsh.model.occ.getCenterOfMass(line[0], line[1])
@@ -44,9 +51,9 @@ def create_simple_gmsh(size: tuple[int, int]):
 			facets.append(line[1])
 	gmsh.model.addPhysicalGroup(1, facets, marker_facet_boundary)
 
+	# Generate and save mesh
 	gmsh.model.mesh.generate(2)
 	gmsh.write("data/mesh_c.msh")
-
 	gmsh.finalize()
 
 

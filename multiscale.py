@@ -17,11 +17,6 @@ kappa_x = 0.6875 * gmesh.d
 kappa_y = 0.6875 * gmesh.d
 kappa_a2 = np.power(10.0, -4)
 
-# V
-gamma = 1e3
-nu = 20
-
-
 def create_kappa(
 		msh: mesh.Mesh,
 		ct: mesh.MeshTags,
@@ -70,7 +65,7 @@ def create_point_source(
 	return f
 
 
-def create_v(FS: fem.FunctionSpace) -> fem.Function:
+def create_v(FS: fem.FunctionSpace, gamma: float, nu: float) -> fem.Function:
 	# Constants
 
 	# Define a Python function for the potential

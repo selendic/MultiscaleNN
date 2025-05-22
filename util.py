@@ -86,15 +86,17 @@ def create_mesh(in_mesh, cell_type, prune_z=False) -> meshio.Mesh:
 # We have now written the mesh and the cell markers to one file, and the facet markers in a separate file.
 # We can now read this data in DOLFINx using XDMFFile.read_mesh and XDMFFile.read_meshtags.
 # The dolfinx.MeshTags stores the index of the entity, along with the value of the marker in two one dimensional arrays.
-def read_mesh(fine: bool) -> Tuple[mesh.Mesh, mesh.MeshTags, mesh.MeshTags]:
+def read_mesh(fine: bool, type: str) -> Tuple[mesh.Mesh, mesh.MeshTags, mesh.MeshTags]:
+	if type not in ["triangle", "quad"]:
+		raise ValueError("type must be either 'triangle' or 'quad'")
 	suffix = "f" if fine else "c"
 	# Read in mesh
 	msh = meshio.read("data/mesh_" + suffix + ".msh")
 
 	# Create and save one file for the mesh, and one file for the facets
-	triangle_mesh = create_mesh(msh, "triangle", prune_z=True)
+	cell_mesh = create_mesh(msh, type, prune_z=True)
 	line_mesh = create_mesh(msh, "line", prune_z=True)
-	meshio.write("data/mesh_" + suffix + ".xdmf", triangle_mesh)
+	meshio.write("data/mesh_" + suffix + ".xdmf", cell_mesh)
 	meshio.write("data/mt_" + suffix + ".xdmf", line_mesh)
 	MPI.COMM_WORLD.barrier()
 

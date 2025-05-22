@@ -58,7 +58,7 @@ def main():
 	V_expr = gamma * ufl.cos(nu * ufl.pi * (x[0] + 0.1)) * ufl.cos(nu * ufl.pi * x[1])
 
 	# Bilinear forms
-	a = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx + ufl.inner(V_expr * u, v) * ufl.dx  # stiffness
+	a = ufl.inner(ufl.grad(u), ufl.grad(v)) * ufl.dx #+ ufl.inner(V_expr * u, v) * ufl.dx  # stiffness
 	m = ufl.inner(u, v) * ufl.dx  # mass
 
 	# Assemble matrices
