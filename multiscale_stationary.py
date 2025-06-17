@@ -262,6 +262,9 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 		fine_stiffness_assembler = LocalAssembler(a + vm)
 		A_h = A_h.copy() + VM_h.copy()
 
+		# Solve the problem in FEniCSx for reference
+
+
 	M_h = fem.assemble_matrix(fem.form(m), bcs_f).to_scipy()
 	assert M_h.shape == (num_dofs_f, num_dofs_f)
 
@@ -288,6 +291,15 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 	#        t0 = time.time()
 
 	A_H_LOD = B_H @ (P_h + Q_h) @ A_h @ (P_h + Q_h).transpose() @ B_H.transpose()
+
+	# We will be interested in certain three modes:
+	# Coarse eigenvalues: [3.43, 12.26, 32.37]
+	# Fine eigenvalues: [22.36, 13.66, 5.96]
+	# LOD eigenvalues: [21.96, 13.14, 6.93]
+	coarse_eigenpairs = [["1", 3.43, None], ["3", 12.26, None], ["9", 32.37, None]]
+	fine_eigenpairs = [["1", -22.36, None], ["3", -13.66, None], ["9", 5.96, None]]
+	lod_eigenpairs = [["1", -21.96, None], ["3", -13.14, None], ["9", 6.93, None]]
+
 	# for i in range(num_steps):
 	if problem == 0:
 		L = ufl.inner(f, v_f) * ufl.dx  # + dt * ufl.inner(f, v_f) * ufl.dx
@@ -351,7 +363,6 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			plotter.add_mesh(grid_uhLOD, show_edges=False, scalars="uhLOD", cmap="seismic")
 			plotter.view_xy()
 			plotter.screenshot(f"plot_stationary/uhLOD_eigen_{r}.png")
-			plotter.close()
 
 			# Save to XDMF
 			#u_i_vec = fem.Function(FS_f)
@@ -360,6 +371,14 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			#						 encoding=XDMFFile.Encoding.ASCII) as xdmf:
 			#	xdmf.write_mesh(msh_f)
 			#	xdmf.write_function(u_i_vec)
+
+			for j in range(len(lod_eigenpairs)):
+				if np.isclose(r, lod_eigenpairs[j][1], atol=1e-2):
+					lod_eigenpairs[j][2] = vec
+					plotter.screenshot(f"plot_to_keep/uhLOD_eigen_mode_{lod_eigenpairs[j][0]}.png")
+					break
+
+			plotter.close()
 
 	t02 = time.time()
 	print(f"Time to solve LOD system: {t02 - t01}\n")
@@ -403,7 +422,6 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			plotter.add_mesh(grid_uh_c, show_edges=False, scalars="uh_c", cmap="seismic")
 			plotter.view_xy()
 			plotter.screenshot(f"plot_stationary/uh_c_eigen_{r}.png")
-			plotter.close()
 
 			# Save to XDMF
 			#u_i_vec = fem.Function(FS_c)
@@ -412,6 +430,14 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			#						 encoding=XDMFFile.Encoding.ASCII) as xdmf:
 			#	xdmf.write_mesh(msh_c)
 			#	xdmf.write_function(u_i_vec)
+
+			for j in range(len(coarse_eigenpairs)):
+				if np.isclose(r, coarse_eigenpairs[j][1], atol=1e-2):
+					coarse_eigenpairs[j][2] = vec
+					plotter.screenshot(f"plot_to_keep/uh_c_eigen_mode_{coarse_eigenpairs[j][0]}.png")
+					break
+
+			plotter.close()
 
 	t12 = time.time()
 	print(f"Time to solve coarse system: {t12 - t11}\n")
@@ -466,7 +492,6 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			plotter.add_mesh(grid_uh_f, show_edges=False, scalars="uh_f", cmap="seismic")
 			plotter.view_xy()
 			plotter.screenshot(f"plot_stationary/uh_f_eigen_{r}.png")
-			plotter.close()
 
 			# Save to XDMF
 			#u_i_vec = fem.Function(FS_f)
@@ -476,9 +501,45 @@ def main(problem: int, num_mesh_refines: int, show_plots: bool):
 			#	xdmf.write_mesh(msh_f)
 			#	xdmf.write_function(u_i_vec)
 
+			for j in range(len(fine_eigenpairs)):
+				if np.isclose(r, fine_eigenpairs[j][1], atol=1e-2):
+					fine_eigenpairs[j][2] = vec
+					plotter.screenshot(f"plot_to_keep/uh_f_eigen_mode_{fine_eigenpairs[j][0]}.png")
+					break
+
+			plotter.close()
+
 	t21 = time.time()
 	print(f"Time to solve fine system: {t21 - t20}")
 	####################################################################################################################
+
+	# Calculate difference between LOD and fine solution and save plots for the three chosen modes
+	print("L2 error between LOD and fine solution:")
+	for i in range(len(lod_eigenpairs)):
+		if lod_eigenpairs[i][2] is not None:
+			diff1 = np.abs(lod_eigenpairs[i][2] - fine_eigenpairs[i][2])
+			diff2 = np.abs(lod_eigenpairs[i][2] + fine_eigenpairs[i][2])	# it's possible that the modes are opposite
+			norm1 = np.linalg.norm(diff1)
+			norm2 = np.linalg.norm(diff2)
+			if norm1 < norm2:
+				diff = diff1
+				norm = norm1
+			else:
+				diff = diff2
+				norm = norm2
+
+			grid_diff = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
+			grid_diff.point_data["diff"] = diff
+			grid_diff.set_active_scalars("diff")
+
+			plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
+			plotter.show_axes()
+			plotter.show_grid()
+			plotter.add_mesh(grid_diff, show_edges=False, scalars="diff", cmap="seismic")
+			plotter.view_xy()
+			plotter.screenshot(f"plot_to_keep/fine-LOD_diff_mode_{lod_eigenpairs[i][0]}.png")
+			plotter.close()
+			print(f" Mode {lod_eigenpairs[i][0]}: {norm:.4f}")
 
 
 '''        
@@ -577,4 +638,4 @@ if __name__ == "__main__":
 		0,  # elliptic; poisson; heat
 		1  # eigenvalue
 	]
-	main(problem=1, num_mesh_refines=2, show_plots=True)
+	main(problem=1, num_mesh_refines=2, show_plots=False)

@@ -4,6 +4,7 @@ import time
 
 import cv2
 import dolfinx
+import matplotlib.pyplot as plt
 import numpy as np
 import pyvista as pv
 import ufl
@@ -33,11 +34,11 @@ def main(problem: int, show_plots: bool):
 	t0 = time.time()
 
 	# Create coarse mesh
-	create_gmsh(False)
+	create_gmsh((1, 1), False)
 	# create_simple_gmsh(cell_marker_1, boundary_marker)
 
 	# Read coarse mesh
-	msh_c, ct_c, ft_c = read_mesh(False)
+	msh_c, ct_c, ft_c = read_mesh(False, "triangle")
 
 	# Create fine mesh
 	# https://fenicsproject.discourse.group/t/input-for-mesh-refinement-with-refine-plaza/13426/4
@@ -206,8 +207,14 @@ def main(problem: int, show_plots: bool):
 
 	A_H_LOD = B_H @ (P_h + Q_h) @ A_h @ (P_h + Q_h).transpose() @ B_H.transpose()
 
+	#####
+	uhLODs = []
+	uh_fs = []
+	#####
+
 	# Time loop
 	u_n = f.copy()
+	#uhLODs.append(f.copy())
 
 	for i in range(num_steps):
 		if problem == 0:
@@ -231,6 +238,7 @@ def main(problem: int, show_plots: bool):
 		uhLOD.x.array.real = u_h_LOD  # spsolve(A_h, f_h)
 
 		u_n = uhLOD.copy()
+		uhLODs.append(uhLOD.copy())
 
 		# Save plot
 		grid_uhLOD = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
@@ -240,7 +248,7 @@ def main(problem: int, show_plots: bool):
 		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
 		plotter.show_axes()
 		plotter.show_grid()
-		plotter.add_mesh(grid_uhLOD, show_edges=True)
+		plotter.add_mesh(grid_uhLOD, show_edges=False)
 		plotter.view_xy()
 		index_str = str(i + 1).zfill(len(str(num_steps)))
 		plotter.screenshot(f"plot_solution_LOD/{index_str}.png")
@@ -280,6 +288,7 @@ def main(problem: int, show_plots: bool):
 	# Solving the system only on fine mesh for comparison
 
 	u_n_f = f.copy()
+	#uh_fs.append(f.copy())
 
 	u_f = ufl.TrialFunction(FS_f)
 	v_f = ufl.TestFunction(FS_f)
@@ -309,6 +318,7 @@ def main(problem: int, show_plots: bool):
 		uh_f.x.array.real = spsolve(A_h, f_h)
 
 		u_n_f = uh_f.copy()
+		uh_fs.append(uh_f.copy())
 
 		# Save plot
 		grid_uh_f = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
@@ -317,7 +327,7 @@ def main(problem: int, show_plots: bool):
 		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
 		plotter.show_axes()
 		plotter.show_grid()
-		plotter.add_mesh(grid_uh_f, show_edges=True)
+		plotter.add_mesh(grid_uh_f, show_edges=False)
 		plotter.view_xy()
 		index_str = str(i + 1).zfill(len(str(num_steps)))
 		plotter.screenshot(f"plot_solution_fine/{index_str}.png")
@@ -342,6 +352,63 @@ def main(problem: int, show_plots: bool):
 	for filename in sorted(glob.glob('plot_solution_fine/*.png')):
 		os.remove(filename)
 
+	####################################################################################################################
+	# For each time step, calc the diff between LOD and fine solution and plot it and make a video of it too
+	# Also, calc the L2-norm in each step and plot it across time
+
+	l2s = []
+	for i in range(num_steps):
+		uhLOD = uhLODs[i]
+		uh_f = uh_fs[i]
+
+		diff = np.abs(uhLOD.x.array.real - uh_f.x.array.real)
+		diff_f = fem.Function(FS_f)
+		diff_f.x.array.real = diff
+		grid_diff = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
+		grid_diff.point_data["diff"] = diff_f.x.array.real
+		grid_diff.set_active_scalars("diff")
+		#with dolfinx.io.XDMFFile(msh_f.comm, f"data/solution_diff_{i}.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
+		#	xdmf.write_mesh(msh_f)
+		#	xdmf.write_function(diff_f)
+		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
+		plotter.show_axes()
+		plotter.show_grid()
+		plotter.add_mesh(grid_diff, show_edges=False)
+		plotter.view_xy()
+		index_str = str(i).zfill(len(str(num_steps)))
+		plotter.screenshot(f"plot_solution_diff/solution_diff_{index_str}.png")
+
+		l2 = np.linalg.norm(diff)
+		l2s.append(l2)
+	# Save L2-norms across time
+	np.savetxt("plot_solution_diff/l2_norms.txt", np.array(l2s))
+	# Merge the photos into a nice video
+	img_array = []
+	for filename in sorted(glob.glob('plot_solution_diff/solution_diff_*.png')):
+		img = cv2.imread(filename)
+		height, width, layers = img.shape
+		size = (width, height)
+		img_array.append(img)
+	out = cv2.VideoWriter('solution_diff.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, size)
+	for i in range(len(img_array)):
+		out.write(img_array[i])
+	out.release()
+	# Clean up
+	for filename in sorted(glob.glob('plot_solution_diff/solution_diff_*.png')):
+		os.remove(filename)
+
+	# Plot L2-norms across time
+	plt.figure(figsize=(10, 5))
+	plt.plot(np.arange(num_steps), l2s, marker='o')
+	plt.title("L2-norma razlike rješenja po vremenskom koraku")  # ("L2-norm of the difference between LOD and fine solution across time")
+	plt.xlabel("Vremenski korak")
+	plt.ylabel("L2-norma")
+	plt.grid()
+	plt.savefig("L2.png")
+	if show_plots:
+		plt.show()
+	plt.close()
+	####################################################################################################################
 
 '''        
     # Coarse solution for comparison
@@ -437,4 +504,4 @@ if __name__ == "__main__":
 		0,  # elliptic; poisson; heat
 		1  # eigenvalue
 	]
-	main(problem=0, show_plots=True)
+	main(problem=0, show_plots=False)
