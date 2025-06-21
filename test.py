@@ -5,7 +5,7 @@ from dolfinx import mesh, fem, plot
 from mpi4py import MPI
 from scipy.sparse import csr_matrix
 
-from multiscale_stationary import solve_eigenproblem
+from poisson_demo import solve_eigenproblem
 
 
 def main():

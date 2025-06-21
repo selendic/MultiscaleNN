@@ -13,7 +13,6 @@ lc_simple = 2e-2 * 4
 
 
 def create_simple_gmsh(size: tuple[int, int], quad: bool = False):
-
 	w, h = size
 
 	gmsh.initialize()
@@ -58,7 +57,6 @@ def create_simple_gmsh(size: tuple[int, int], quad: bool = False):
 
 
 def create_gmsh(size: tuple[int, int], fine: bool = False):
-
 	w, h = size
 
 	gmsh.initialize()
@@ -68,7 +66,7 @@ def create_gmsh(size: tuple[int, int], fine: bool = False):
 	inner_cell_tags = []
 	ones, others = [], []
 	boundary_tags = []
-	#if proc == 0:
+	# if proc == 0:
 	# Create the outer domain
 	p1 = gmsh.model.occ.addPoint(0.0, 0.0, 0.0, lc_outer)
 	p2 = gmsh.model.occ.addPoint(w, 0.0, 0.0, lc_outer)
@@ -108,30 +106,30 @@ def create_gmsh(size: tuple[int, int], fine: bool = False):
 
 			# Create outer rectangle
 			# gmsh.model.occ.addRectangle(d*i, d*j, 0, d, d, tag=tag1)
-			#p1 = gmsh.model.occ.addPoint(d * i, d * j, 0, lc_outer)
-			#p2 = gmsh.model.occ.addPoint(d * (i + 1), d * j, 0, lc_outer)
-			#p3 = gmsh.model.occ.addPoint(d * (i + 1), d * (j + 1), 0, lc_outer)
-			#p4 = gmsh.model.occ.addPoint(d * i, d * (j + 1), 0, lc_outer)
-			#l1 = gmsh.model.occ.addLine(p1, p2)
-			#l2 = gmsh.model.occ.addLine(p2, p3)
-			#l3 = gmsh.model.occ.addLine(p3, p4)
-			#l4 = gmsh.model.occ.addLine(p4, p1)
+			# p1 = gmsh.model.occ.addPoint(d * i, d * j, 0, lc_outer)
+			# p2 = gmsh.model.occ.addPoint(d * (i + 1), d * j, 0, lc_outer)
+			# p3 = gmsh.model.occ.addPoint(d * (i + 1), d * (j + 1), 0, lc_outer)
+			# p4 = gmsh.model.occ.addPoint(d * i, d * (j + 1), 0, lc_outer)
+			# l1 = gmsh.model.occ.addLine(p1, p2)
+			# l2 = gmsh.model.occ.addLine(p2, p3)
+			# l3 = gmsh.model.occ.addLine(p3, p4)
+			# l4 = gmsh.model.occ.addLine(p4, p1)
 
-			#cl_outer = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
-			#ps_outer = gmsh.model.occ.addPlaneSurface([cl_outer, cl_inner])
+			# cl_outer = gmsh.model.occ.addCurveLoop([l1, l2, l3, l4])
+			# ps_outer = gmsh.model.occ.addPlaneSurface([cl_outer, cl_inner])
 
 			# We add the rectangles in the subdomain list
-			#outer_cell_tags.append(ps_outer)
+			# outer_cell_tags.append(ps_outer)
 			inner_cell_tags.append(ps_inner)
 			others.append((2, ps_inner))
 
-			# We add the appropriate rectangles to appropriate list for fragmenting
-			#if (i + j) % 2 == 0:
-			#	ones.append((2, ps_outer))
-			#	others.append((2, ps_inner))
-			#else:
-			#	ones.append((2, ps_inner))
-			#	others.append((2, ps_outer))
+		# We add the appropriate rectangles to appropriate list for fragmenting
+	# if (i + j) % 2 == 0:
+	#	ones.append((2, ps_outer))
+	#	others.append((2, ps_inner))
+	# else:
+	#	ones.append((2, ps_inner))
+	#	others.append((2, ps_outer))
 
 	outer_cell_tags[0] = gmsh.model.occ.fragment(ones, others)[1][0][0][1]
 

@@ -177,5 +177,6 @@ cython_debug/
 .idea/
 
 # Project specific
-/plot/
-/Projekt/
+Projekt/
+sols/
+plot_eigen/

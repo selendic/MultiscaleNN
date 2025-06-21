@@ -5,7 +5,6 @@ import time
 import cv2
 import dolfinx
 import matplotlib.pyplot as plt
-import numpy as np
 import pyvista as pv
 import ufl
 from dolfinx import fem, mesh, plot
@@ -18,8 +17,10 @@ from scipy.sparse.linalg import spsolve
 
 from gmesh import *
 from local_assembler import LocalAssembler
-from multiscale import kappa_x, kappa_a2, kappa_y, create_kappa, create_point_source, compute_correction_operator
-from util import read_mesh, interpolation_matrix_non_matching_meshes
+from correction_operator import compute_correction_operator
+from util_mesh import kappa_x, kappa_a2, kappa_y, create_kappa, create_point_source, read_mesh, \
+	interpolation_matrix_non_matching_meshes
+from util_pyvista import plot_grid_cells, plot_grid_points, screenshot
 
 proc = MPI.COMM_WORLD.rank
 
@@ -30,7 +31,7 @@ T = int(dt * num_steps)
 assert num_steps > 0
 
 
-def main(problem: int, show_plots: bool):
+def main(show_plots: bool):
 	t0 = time.time()
 
 	# Create coarse mesh
@@ -120,43 +121,16 @@ def main(problem: int, show_plots: bool):
 	f = create_point_source(msh_f, kappa_x, kappa_y, kappa_a2)
 
 	# Plot q and point source
-	grid_q = pv.UnstructuredGrid(*plot.vtk_mesh(msh_f, msh_f.topology.dim))
-	grid_q.cell_data["q"] = q.x.array.real
-	grid_q.set_active_scalars("q")
-	plotter = pv.Plotter(window_size=[1000, 1000], off_screen=not show_plots)
-	plotter.show_axes()
-	plotter.show_grid()
-	plotter.add_mesh(grid_q, show_edges=True)
-	plotter.view_xy()
-	if not show_plots:
-		plotter.screenshot("data/q.png")
-	else:
-		plotter.show()
-
-	grid_ps = pv.UnstructuredGrid(*plot.vtk_mesh(msh_f, msh_f.topology.dim))
-	grid_ps.point_data["f"] = f.x.array.real
-	grid_ps.set_active_scalars("f")
-	plotter = pv.Plotter(window_size=[1000, 1000], off_screen=not show_plots)
-	plotter.show_axes()
-	plotter.show_grid()
-	plotter.add_mesh(grid_ps, show_edges=True)
-	plotter.view_xy()
-	if not show_plots:
-		plotter.screenshot("data/f.png")
-	else:
-		plotter.show()
+	plot_grid_cells(msh_f, q.x.array.real, "q", "data/q.png", show_plots, cmap="viridis")
+	plot_grid_points(msh_f, f.x.array.real, "f", "data/f.png", show_plots, cmap="viridis")
 
 	# Plot initial state
-	grid_f = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
-	grid_f.point_data["uhLOD"] = f.x.array.real
-	grid_f.set_active_scalars("uhLOD")
-	plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
-	plotter.show_axes()
-	plotter.show_grid()
-	plotter.add_mesh(grid_f, show_edges=True)
-	plotter.view_xy()
-	plotter.screenshot(f"plot_solution_LOD/{"0".zfill(len(str(num_steps)))}.png")
-	plotter.screenshot(f"plot_solution_fine/{"0".zfill(len(str(num_steps)))}.png")
+	if not os.path.exists("plot_solution_LOD"):
+		os.makedirs("plot_solution_LOD")
+	if not os.path.exists("plot_solution_fine"):
+		os.makedirs("plot_solution_fine")
+	screenshot(msh_f, f.x.array.real, f"plot_solution_LOD/{'0'.zfill(len(str(num_steps)))}.png", cmap="viridis")
+	screenshot(msh_f, f.x.array.real, f"plot_solution_fine/{'0'.zfill(len(str(num_steps)))}.png", cmap="viridis")
 
 	####################################################################################################################
 	t0 = time.time()
@@ -170,14 +144,10 @@ def main(problem: int, show_plots: bool):
 
 	u_f = ufl.TrialFunction(FS_f)
 	v_f = ufl.TestFunction(FS_f)
-	if problem == 0:
-		a = ufl.inner(u_f, v_f) * ufl.dx + dt * ufl.inner(q * ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx
-		m = ufl.inner(u_f, v_f) * ufl.dx
-	else:
-		v_expr = q.copy()
-		a = ufl.inner(u_f, v_f) * ufl.dx + dt * ufl.inner(ufl.grad(u_f),
-														  ufl.grad(v_f)) * ufl.dx + dt * v_expr * u_f * v_f * ufl.dx
-		m = ufl.inner(u_f, v_f) * ufl.dx
+
+	a = ufl.inner(u_f, v_f) * ufl.dx + dt * ufl.inner(q * ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx
+	m = ufl.inner(u_f, v_f) * ufl.dx
+
 	fine_stiffness_assembler = LocalAssembler(a)
 
 	A_h = fem.assemble_matrix(fem.form(a), bcs_f).to_scipy()
@@ -214,13 +184,10 @@ def main(problem: int, show_plots: bool):
 
 	# Time loop
 	u_n = f.copy()
-	#uhLODs.append(f.copy())
+	# uhLODs.append(f.copy())
 
 	for i in range(num_steps):
-		if problem == 0:
-			L = ufl.inner(u_n, v_f) * ufl.dx  # + dt * ufl.inner(f, v_f) * ufl.dx
-		else:
-			L = ufl.inner(u_n, v_f) * ufl.dx  # + dt * ufl.inner(l * u_n, v_f) * ufl.dx
+		L = ufl.inner(u_n, v_f) * ufl.dx  # + dt * ufl.inner(f, v_f) * ufl.dx
 		f_h = fem.assemble_vector(fem.form(L)).array
 		assert f_h.shape == (num_dofs_f,)
 
@@ -241,17 +208,8 @@ def main(problem: int, show_plots: bool):
 		uhLODs.append(uhLOD.copy())
 
 		# Save plot
-		grid_uhLOD = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
-		grid_uhLOD.point_data["uhLOD"] = uhLOD.x.array.real
-		grid_uhLOD.set_active_scalars("uhLOD")
-
-		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
-		plotter.show_axes()
-		plotter.show_grid()
-		plotter.add_mesh(grid_uhLOD, show_edges=False)
-		plotter.view_xy()
 		index_str = str(i + 1).zfill(len(str(num_steps)))
-		plotter.screenshot(f"plot_solution_LOD/{index_str}.png")
+		screenshot(msh_f, uhLOD.x.array.real, f"plot_solution_LOD/{index_str}.png")
 
 	t1 = time.time()
 	####################################################################################################################
@@ -288,18 +246,11 @@ def main(problem: int, show_plots: bool):
 	# Solving the system only on fine mesh for comparison
 
 	u_n_f = f.copy()
-	#uh_fs.append(f.copy())
+	# uh_fs.append(f.copy())
 
 	u_f = ufl.TrialFunction(FS_f)
 	v_f = ufl.TestFunction(FS_f)
-	if problem == 0:
-		a = ufl.inner(u_f, v_f) * ufl.dx + dt * ufl.inner(q * ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx
-	# m = ufl.inner(u_f, v_f) * ufl.dx
-	else:
-		v_expr = q.copy()
-		a = ufl.inner(u_f, v_f) * ufl.dx + dt * ufl.inner(ufl.grad(u_f),
-														  ufl.grad(v_f)) * ufl.dx + dt * v_expr * u_f * v_f * ufl.dx
-	# m = ufl.inner(u_f, v_f) * ufl.dx
+	a = ufl.inner(u_f, v_f) * ufl.dx + dt * ufl.inner(q * ufl.grad(u_f), ufl.grad(v_f)) * ufl.dx
 
 	A_h = fem.assemble_matrix(fem.form(a), bcs_f).to_scipy()
 	assert A_h.shape == (num_dofs_f, num_dofs_f)
@@ -307,10 +258,7 @@ def main(problem: int, show_plots: bool):
 	# assert M_h.shape == (num_dofs_f, num_dofs_f)
 
 	for i in range(num_steps):
-		if problem == 0:
-			L = ufl.inner(u_n_f, v_f) * ufl.dx  # + dt * ufl.inner(f, v_f) * ufl.dx
-		else:
-			L = ufl.inner(u_n_f, v_f) * ufl.dx  # + dt * ufl.inner(l * u_n, v_f) * ufl.dx
+		L = ufl.inner(u_n_f, v_f) * ufl.dx  # + dt * ufl.inner(f, v_f) * ufl.dx
 		f_h = fem.assemble_vector(fem.form(L)).array
 		assert f_h.shape == (num_dofs_f,)
 
@@ -321,16 +269,8 @@ def main(problem: int, show_plots: bool):
 		uh_fs.append(uh_f.copy())
 
 		# Save plot
-		grid_uh_f = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
-		grid_uh_f.point_data["uh_f"] = uh_f.x.array.real
-		grid_uh_f.set_active_scalars("uh_f")
-		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
-		plotter.show_axes()
-		plotter.show_grid()
-		plotter.add_mesh(grid_uh_f, show_edges=False)
-		plotter.view_xy()
 		index_str = str(i + 1).zfill(len(str(num_steps)))
-		plotter.screenshot(f"plot_solution_fine/{index_str}.png")
+		screenshot(msh_f, uh_f.x.array.real, f"plot_solution_fine/{index_str}.png", cmap="viridis")
 
 	t1 = time.time()
 	####################################################################################################################
@@ -364,19 +304,11 @@ def main(problem: int, show_plots: bool):
 		diff = np.abs(uhLOD.x.array.real - uh_f.x.array.real)
 		diff_f = fem.Function(FS_f)
 		diff_f.x.array.real = diff
-		grid_diff = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
-		grid_diff.point_data["diff"] = diff_f.x.array.real
-		grid_diff.set_active_scalars("diff")
-		#with dolfinx.io.XDMFFile(msh_f.comm, f"data/solution_diff_{i}.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
+		# with dolfinx.io.XDMFFile(msh_f.comm, f"data/solution_diff_{i}.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
 		#	xdmf.write_mesh(msh_f)
 		#	xdmf.write_function(diff_f)
-		plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
-		plotter.show_axes()
-		plotter.show_grid()
-		plotter.add_mesh(grid_diff, show_edges=False)
-		plotter.view_xy()
 		index_str = str(i).zfill(len(str(num_steps)))
-		plotter.screenshot(f"plot_solution_diff/solution_diff_{index_str}.png")
+		screenshot(msh_f, diff_f.x.array.real, f"plot_solution_diff/solution_diff_{index_str}.png", cmap="viridis")
 
 		l2 = np.linalg.norm(diff)
 		l2s.append(l2)
@@ -400,7 +332,8 @@ def main(problem: int, show_plots: bool):
 	# Plot L2-norms across time
 	plt.figure(figsize=(10, 5))
 	plt.plot(np.arange(num_steps), l2s, marker='o')
-	plt.title("L2-norma razlike rješenja po vremenskom koraku")  # ("L2-norm of the difference between LOD and fine solution across time")
+	plt.title(
+		"L2-norma razlike rješenja po vremenskom koraku")  # ("L2-norm of the difference between LOD and fine solution across time")
 	plt.xlabel("Vremenski korak")
 	plt.ylabel("L2-norma")
 	plt.grid()
@@ -408,100 +341,10 @@ def main(problem: int, show_plots: bool):
 	if show_plots:
 		plt.show()
 	plt.close()
-	####################################################################################################################
 
-'''        
-    # Coarse solution for comparison
-    A_H = B_H @ P_h @ A_h @ P_h.transpose() @ B_H.transpose()
-    f_H = B_H @ P_h @ f_h
-    uh_c = fem.Function(FS_c)
-    uh_c.x.array.real = B_H.transpose() @ spsolve(A_H, f_H)
-    print(f"Time to solve just the coarse system: {time.time() - t0}")
-    t0 = time.time()
-    grid_uh_c = pv.UnstructuredGrid(*plot.vtk_mesh(FS_c))
-    grid_uh_c.point_data["uh_c"] = uh_c.x.array.real
-    grid_uh_c.set_active_scalars("uh_c")
 
-    with dolfinx.io.XDMFFile(msh_c.comm, "data/solution_coarse.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
-        xdmf.write_mesh(msh_c)
-        xdmf.write_function(uh_c)
+####################################################################################################################
 
-    # Fine solution for comparison
-    uh_f = fem.Function(FS_f)
-    uh_f.x.array.real = spsolve(A_h, f_h)
-    print(f"Time to solve whole fine system: {time.time() - t0}")
-    grid_uh_f = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
-    grid_uh_f.point_data["uh_f"] = uh_f.x.array.real
-    grid_uh_f.set_active_scalars("uh_f")
-
-    with dolfinx.io.XDMFFile(msh_f.comm, "data/solution_fine.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
-        xdmf.write_mesh(msh_f)
-        xdmf.write_function(uh_f)
-
-    # pv.start_xvfb()
-    for grid, suffix in [(grid_uh_c, "coarse"), (grid_uh_f, "fine"), (grid_uhLOD, "LOD")]:
-        plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
-        plotter.show_axes()
-        plotter.show_grid()
-        plotter.add_mesh(grid, show_edges=True)
-        plotter.view_xy()
-        plotter.screenshot(f"data/solution_{suffix}.png")
-
-    # Interpolate coarse solution to fine mesh
-    # https://github.com/FEniCS/dolfinx/blob/v0.8.0/python/test/unit/fem/test_interpolation.py
-    uh_c_to_f = fem.Function(FS_f)
-    uh_c_to_f.interpolate(uh_c, nmm_interpolation_data=dolfinx.fem.create_nonmatching_meshes_interpolation_data(
-        uh_c_to_f.function_space.mesh._cpp_object,
-        uh_c_to_f.function_space.element,
-        uh_c.function_space.mesh._cpp_object,
-        padding=1e-14
-    ))
-
-    # Calculate L2 errors
-    L2_c_f = fem.assemble_scalar(fem.form(
-        ufl.inner(uh_c_to_f - uh_f, uh_c_to_f - uh_f) * ufl.dx
-    ))
-    L2_c_f = np.sqrt(msh_f.comm.allreduce(L2_c_f, op=MPI.SUM))
-
-    L2_LOD_c = fem.assemble_scalar(fem.form(
-        ufl.inner(uhLOD - uh_c_to_f, uhLOD - uh_c_to_f) * ufl.dx
-    ))
-    L2_LOD_c = np.sqrt(msh_f.comm.allreduce(L2_LOD_c, op=MPI.SUM))
-
-    L2_LOD_f = fem.assemble_scalar(fem.form(
-        ufl.inner(uhLOD - uh_f, uhLOD - uh_f) * ufl.dx
-    ))
-    L2_LOD_f = np.sqrt(msh_f.comm.allreduce(L2_LOD_f, op=MPI.SUM))
-
-    print(f"L2 error between coarse and fine solution: {L2_c_f}")
-    print(f"L2 error between LOD and coarse solution: {L2_LOD_c}")
-    print(f"L2 error between LOD and fine solution: {L2_LOD_f}")
-
-    # Plot absolute difference between LOD and fine solution
-    diff = fem.Function(FS_f)
-    diff.x.array.real = uhLOD.x.array.real - uh_f.x.array.real
-    for i in range(diff.x.array.real.size):
-        if diff.x.array.real[i] < 0.0:
-            diff.x.array.real[i] = -diff.x.array.real[i]
-    grid_diff = pv.UnstructuredGrid(*plot.vtk_mesh(FS_f))
-    grid_diff.point_data["diff"] = diff.x.array.real
-    grid_diff.set_active_scalars("diff")
-
-    with dolfinx.io.XDMFFile(msh_f.comm, "data/solution_diff.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
-        xdmf.write_mesh(msh_f)
-        xdmf.write_function(diff)
-
-    plotter = pv.Plotter(window_size=[1000, 1000], off_screen=True)
-    plotter.show_axes()
-    plotter.show_grid()
-    plotter.add_mesh(grid_diff, show_edges=True)
-    plotter.view_xy()
-    plotter.screenshot("data/solution_diff.png")
-'''
 
 if __name__ == "__main__":
-	problems = [
-		0,  # elliptic; poisson; heat
-		1  # eigenvalue
-	]
-	main(problem=0, show_plots=False)
+	main(show_plots=False)
