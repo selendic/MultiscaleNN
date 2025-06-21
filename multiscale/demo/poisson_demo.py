@@ -13,9 +13,9 @@ import gmesh
 from gmesh import *
 from local_assembler import LocalAssembler
 from correction_operator import compute_correction_operator
-from util_mesh import create_kappa, create_point_source, kappa_x, kappa_y, kappa_a2, read_mesh, \
+from multiscale.util.util_mesh import create_kappa, create_point_source, kappa_x, kappa_y, kappa_a2, read_mesh, \
 	interpolation_matrix_non_matching_meshes, refine_mesh
-from util_pyvista import plot_grid_points, plot_grid_cells
+from multiscale.util.util_pyvista import plot_grid_points, plot_grid_cells
 
 proc = MPI.COMM_WORLD.rank
 
@@ -104,8 +104,8 @@ def main(num_mesh_refines: int, show_plots: bool):
 	f = create_point_source(msh_f, kappa_x, kappa_y, kappa_a2)
 
 	# Plot q and point source
-	plot_grid_cells(msh_f, q.x.array.real, "q", "data/q.png", show_plots, cmap="viridis")
-	plot_grid_points(msh_f, f.x.array.real, "f", "data/f.png", show_plots, cmap="viridis")
+	plot_grid_cells(msh_f, q.x.array.real, "q", "../../data/q.png", show_plots, cmap="viridis")
+	plot_grid_points(msh_f, f.x.array.real, "f", "../../data/f.png", show_plots, cmap="viridis")
 
 	####################################################################################################################
 
@@ -173,9 +173,9 @@ def main(num_mesh_refines: int, show_plots: bool):
 	# u_n = uhLOD.copy()
 
 	# Save plot
-	plot_grid_points(msh_f, uhLOD.x.array.real, "u_LOD", "plot_poisson/u_LOD.png", show_plots, cmap="viridis", show_edges=False)
+	plot_grid_points(msh_f, uhLOD.x.array.real, "u_LOD", "../../plot_poisson/u_LOD.png", show_plots, cmap="viridis", show_edges=False)
 
-	with dolfinx.io.XDMFFile(msh_f.comm, "data/u_LOD.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
+	with dolfinx.io.XDMFFile(msh_f.comm, "../../data/u_LOD.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
 		xdmf.write_mesh(msh_f)
 		xdmf.write_function(uhLOD)
 
@@ -194,7 +194,7 @@ def main(num_mesh_refines: int, show_plots: bool):
 	print(f"Time to solve coarse system: {t12 - t11}\n")
 
 	# Save plot
-	plot_grid_points(msh_c, uh_c.x.array.real, "u_c", "plot_poisson/u_c.png", show_plots, cmap="viridis", show_edges=False)
+	plot_grid_points(msh_c, uh_c.x.array.real, "u_c", "../../plot_poisson/u_c.png", show_plots, cmap="viridis", show_edges=False)
 
 	grid_uh_c = pv.UnstructuredGrid(*plot.vtk_mesh(FS_c))
 	grid_uh_c.point_data["u_c"] = uh_c.x.array.real
@@ -225,7 +225,7 @@ def main(num_mesh_refines: int, show_plots: bool):
 	print(f"Time to solve fine system: {t21 - t20}")
 
 	# Save plot
-	plot_grid_points(msh_f, uh_f.x.array.real, "u_f", "plot_poisson/u_f.png", show_plots, cmap="viridis", show_edges=False)
+	plot_grid_points(msh_f, uh_f.x.array.real, "u_f", "../../plot_poisson/u_f.png", show_plots, cmap="viridis", show_edges=False)
 	####################################################################################################################
 
 	# Calculate L2 errors
@@ -258,7 +258,7 @@ def main(num_mesh_refines: int, show_plots: bool):
 	grid_diff.point_data["diff"] = diff.x.array.real
 	grid_diff.set_active_scalars("diff")
 
-	with dolfinx.io.XDMFFile(msh_f.comm, "data/solution_diff.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
+	with dolfinx.io.XDMFFile(msh_f.comm, "../../data/solution_diff.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
 		xdmf.write_mesh(msh_f)
 		xdmf.write_function(diff)
 

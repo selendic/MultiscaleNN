@@ -12,8 +12,8 @@ import gmesh
 from correction_operator import compute_correction_operator
 from gmesh import *
 from local_assembler import LocalAssembler
-from util_mesh import create_v, read_mesh, refine_mesh, interpolation_matrix_non_matching_meshes
-from util_pyvista import plot_grid_points, screenshot
+from multiscale.util.util_mesh import create_v, read_mesh, refine_mesh, interpolation_matrix_non_matching_meshes
+from multiscale.util.util_pyvista import plot_grid_points, screenshot
 
 proc = MPI.COMM_WORLD.rank
 
@@ -124,8 +124,8 @@ def main(num_mesh_refines: int, show_plots: bool):
 	v_c = create_v(FS_c, gamma, nu)
 
 	# Plot the coefficient
-	plot_grid_points(msh_c, v_c.x.array.real, "v_c", "data/v_c.png", show_plots, cmap="seismic")
-	plot_grid_points(msh_f, v_f.x.array.real, "v_f", "data/v_f.png", show_plots, cmap="seismic")
+	plot_grid_points(msh_c, v_c.x.array.real, "v_c", "../../data/v_c.png", show_plots, cmap="seismic")
+	plot_grid_points(msh_f, v_f.x.array.real, "v_f", "../../data/v_f.png", show_plots, cmap="seismic")
 
 	####################################################################################################################
 

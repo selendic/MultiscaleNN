@@ -9,6 +9,10 @@ from dolfinx.cpp.mesh import to_string
 from dolfinx.cpp.refinement import RefinementOption
 from dolfinx.io import XDMFFile
 from mpi4py import MPI
+
+import sys
+from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parent.parent / "multiscale"))
 import gmesh
 
 kappa_1 = lambda x: 3  # kappa in large cells
