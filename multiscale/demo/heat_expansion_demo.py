@@ -121,14 +121,16 @@ def main(show_plots: bool):
 	f = create_point_source(msh_f, kappa_x, kappa_y, kappa_a2)
 
 	# Plot q and point source
-	plot_grid_cells(msh_f, q.x.array.real, "q", "../../data/q.png", show_plots, cmap="viridis")
-	plot_grid_points(msh_f, f.x.array.real, "f", "../../data/f.png", show_plots, cmap="viridis")
+	plot_grid_cells(msh_f, q.x.array.real, "q", "data/q.png", show_plots, cmap="viridis")
+	plot_grid_points(msh_f, f.x.array.real, "f", "data/f.png", show_plots, cmap="viridis")
 
 	# Plot initial state
-	if not os.path.exists("../../plot_solution_LOD"):
-		os.makedirs("../../plot_solution_LOD")
-	if not os.path.exists("../../plot_solution_fine"):
-		os.makedirs("../../plot_solution_fine")
+	if not os.path.exists("plot_solution_LOD"):
+		os.makedirs("plot_solution_LOD")
+	if not os.path.exists("plot_solution_fine"):
+		os.makedirs("plot_solution_fine")
+	if not os.path.exists("plot_heat_expansion"):
+		os.makedirs("plot_heat_expansion")
 	screenshot(msh_f, f.x.array.real, f"plot_solution_LOD/{'0'.zfill(len(str(num_steps)))}.png", cmap="viridis")
 	screenshot(msh_f, f.x.array.real, f"plot_solution_fine/{'0'.zfill(len(str(num_steps)))}.png", cmap="viridis")
 
@@ -209,7 +211,7 @@ def main(show_plots: bool):
 
 		# Save plot
 		index_str = str(i + 1).zfill(len(str(num_steps)))
-		screenshot(msh_f, uhLOD.x.array.real, f"plot_solution_LOD/{index_str}.png")
+		screenshot(msh_f, uhLOD.x.array.real, f"plot_solution_LOD/{index_str}.png", cmap="viridis")
 
 	t1 = time.time()
 	####################################################################################################################
@@ -219,7 +221,7 @@ def main(show_plots: bool):
 	grid_uhLOD.point_data["uhLOD"] = uhLOD.x.array.real
 	grid_uhLOD.set_active_scalars("uhLOD")
 
-	with dolfinx.io.XDMFFile(msh_f.comm, "../../data/solution_LOD.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
+	with dolfinx.io.XDMFFile(msh_f.comm, "data/solution_LOD.xdmf", "w", encoding=XDMFFile.Encoding.ASCII) as xdmf:
 		xdmf.write_mesh(msh_f)
 		xdmf.write_function(uhLOD)
 
@@ -231,7 +233,7 @@ def main(show_plots: bool):
 		size = (width, height)
 		img_array.append(img)
 
-	out = cv2.VideoWriter('../../solution_LOD.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, size)
+	out = cv2.VideoWriter('plot_heat_expansion/solution_LOD.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, size)
 	for i in range(len(img_array)):
 		out.write(img_array[i])
 	out.release()
@@ -283,7 +285,7 @@ def main(show_plots: bool):
 		height, width, layers = img.shape
 		size = (width, height)
 		img_array.append(img)
-	out = cv2.VideoWriter('../../solution_fine.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, size)
+	out = cv2.VideoWriter('plot_heat_expansion/solution_fine.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, size)
 	for i in range(len(img_array)):
 		out.write(img_array[i])
 	out.release()
@@ -313,7 +315,7 @@ def main(show_plots: bool):
 		l2 = np.linalg.norm(diff)
 		l2s.append(l2)
 	# Save L2-norms across time
-	np.savetxt("../plot_solution_diff/l2_norms.txt", np.array(l2s))
+	np.savetxt("plot_solution_diff/l2_norms.txt", np.array(l2s))
 	# Merge the photos into a nice video
 	img_array = []
 	for filename in sorted(glob.glob('plot_solution_diff/solution_diff_*.png')):
@@ -321,7 +323,7 @@ def main(show_plots: bool):
 		height, width, layers = img.shape
 		size = (width, height)
 		img_array.append(img)
-	out = cv2.VideoWriter('../../solution_diff.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, size)
+	out = cv2.VideoWriter('plot_heat_expansion/solution_diff.mp4', cv2.VideoWriter_fourcc(*'mp4v'), 30, size)
 	for i in range(len(img_array)):
 		out.write(img_array[i])
 	out.release()

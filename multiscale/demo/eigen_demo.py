@@ -1,3 +1,4 @@
+import os
 import time
 
 import dolfinx
@@ -124,8 +125,15 @@ def main(num_mesh_refines: int, show_plots: bool):
 	v_c = create_v(FS_c, gamma, nu)
 
 	# Plot the coefficient
-	plot_grid_points(msh_c, v_c.x.array.real, "v_c", "../../data/v_c.png", show_plots, cmap="seismic")
-	plot_grid_points(msh_f, v_f.x.array.real, "v_f", "../../data/v_f.png", show_plots, cmap="seismic")
+	if not os.path.exists("data"):
+		os.makedirs("data")
+	if not os.path.exists("plot_eigen"):
+		os.makedirs("plot_eigen")
+	if not os.path.exists("plot_to_keep"):
+		os.makedirs("plot_to_keep")
+	plot_grid_points(msh_c, v_c.x.array.real, "v_c", "data/v_c.png", show_plots, cmap="seismic")
+	plot_grid_points(msh_f, v_f.x.array.real, "v_f", "data/v_f.png", show_plots, cmap="seismic")
+
 
 	####################################################################################################################
 

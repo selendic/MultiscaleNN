@@ -52,7 +52,7 @@ def create_simple_gmsh(size: tuple[int, int], quad: bool = False):
 
 	# Generate and save mesh
 	gmsh.model.mesh.generate(2)
-	gmsh.write("../data/mesh_c.msh")
+	gmsh.write("data/mesh_c.msh")
 	gmsh.finalize()
 
 
