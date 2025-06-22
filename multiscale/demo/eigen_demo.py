@@ -129,8 +129,8 @@ def main(num_mesh_refines: int, show_plots: bool):
 		os.makedirs("data")
 	if not os.path.exists("plot_eigen"):
 		os.makedirs("plot_eigen")
-	if not os.path.exists("plot_to_keep"):
-		os.makedirs("plot_to_keep")
+	if not os.path.exists("plot_eigen_modes_1_3_9"):
+		os.makedirs("plot_eigen_modes_1_3_9")
 	plot_grid_points(msh_c, v_c.x.array.real, "v_c", "data/v_c.png", show_plots, cmap="seismic")
 	plot_grid_points(msh_f, v_f.x.array.real, "v_f", "data/v_f.png", show_plots, cmap="seismic")
 
@@ -229,7 +229,7 @@ def main(num_mesh_refines: int, show_plots: bool):
 		for j in range(len(lod_eigenpairs)):
 			if np.isclose(r, lod_eigenpairs[j][1], atol=1e-2):
 				lod_eigenpairs[j][2] = vec
-				screenshot(msh_f, vec, f"plot_to_keep/u_LOD_eigen_mode_{lod_eigenpairs[j][0]}.png")
+				screenshot(msh_f, vec, f"plot_eigen_modes_1_3_9/u_LOD_eigen_mode_{lod_eigenpairs[j][0]}.png")
 				break
 
 	####################################################################################################################
@@ -273,7 +273,7 @@ def main(num_mesh_refines: int, show_plots: bool):
 		for j in range(len(coarse_eigenpairs)):
 			if np.isclose(r, coarse_eigenpairs[j][1], atol=1e-2):
 				coarse_eigenpairs[j][2] = vec
-				screenshot(msh_c, vec, f"plot_to_keep/u_c_eigen_mode_{coarse_eigenpairs[j][0]}.png")
+				screenshot(msh_c, vec, f"plot_eigen_modes_1_3_9/u_c_eigen_mode_{coarse_eigenpairs[j][0]}.png")
 				break
 
 	####################################################################################################################
@@ -311,7 +311,7 @@ def main(num_mesh_refines: int, show_plots: bool):
 		for j in range(len(fine_eigenpairs)):
 			if np.isclose(r, fine_eigenpairs[j][1], atol=1e-2):
 				fine_eigenpairs[j][2] = vec
-				screenshot(msh_f, vec, f"plot_to_keep/u_f_eigen_mode_{fine_eigenpairs[j][0]}.png")
+				screenshot(msh_f, vec, f"plot_eigen_modes_1_3_9/u_f_eigen_mode_{fine_eigenpairs[j][0]}.png")
 				break
 
 	####################################################################################################################
@@ -331,7 +331,7 @@ def main(num_mesh_refines: int, show_plots: bool):
 				diff = diff2
 				norm = norm2
 
-			screenshot(msh_f, diff, f"plot_to_keep/fine-LOD_diff_mode_{lod_eigenpairs[i][0]}.png")
+			screenshot(msh_f, diff, f"plot_eigen_modes_1_3_9/fine-LOD_diff_mode_{lod_eigenpairs[i][0]}.png")
 
 			print(f" Mode {lod_eigenpairs[i][0]}: {norm:.4f}")
 
